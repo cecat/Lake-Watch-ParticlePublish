@@ -11,3 +11,7 @@ secrets.h
 # binaries and object files
 *.bin
 *.o
+
+# a few loose ends
+src/PowerWatch.cpp
+src/dev-plan.txt
