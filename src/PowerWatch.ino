@@ -172,13 +172,32 @@ void checkPower() {  TimeToCheck = TRUE;  }
 // Reporting timer interrupt handler
 void reportPower() {  TimeToReport = TRUE;  }
 
-// Report to HASS via MQTT
+/* Report to HASS via MQTT
+ 1/25/24 original code just checks if connection is still alive,
+   telling us nothing about whether the message arrived at HASS
+   Will insert logic to check (via QoS) and retry every 30s
+   for four minutes, then give up on this measurement.
+   (four minutes because we are just going to measure and report
+   at that interval - there is no compelling reason to report
+   less frequently as the original code did)
+ */
 void tellHASS (const char *ha_topic, String ha_payload) {  
 
   delay(100); // bit of delay in between successive messages
   if (client.isConnected()){
-    client.publish(ha_topic, ha_payload);
     mqttCt++;
+    if (client.publish(ha_topic, ha_payload, 1)) {
+      return;
+    } else {
+      for (int i=0; i<9; i++) { // try up to 9 times
+        delay(30000);
+        if (client.publish(ha_topic, ha_payload, 1)) {
+          return;
+        }
+      }
+      Particle.publish("mqtt", "Message failed", 3600, PRIVATE);
+    }
+    
   } else {
     mqttFails++;
     Particle.publish("mqtt", "Connection dropped", 3600, PRIVATE);
