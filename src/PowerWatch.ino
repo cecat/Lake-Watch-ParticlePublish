@@ -74,6 +74,7 @@ void setup() {
       SELF_RESTART = FALSE;
     }
 
+    Particle.variable("crawlTemp", crawlTemp);
     Particle.variable("fwVersion", firmwareVersion);
     Particle.publish("app_version", APP_VERSION, PRIVATE);
 
