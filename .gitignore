@@ -1,0 +1,13 @@
+# Ignore build artifacts and generated files
+target/
+.vscode/
+
+# Ignore all contents of the lib/ folder (Particle libraries)
+lib/
+
+# Loose lips...
+secrets.h
+
+# binaries and object files
+*.bin
+*.o
