@@ -8,6 +8,8 @@
       - added connection check to MQTT just to be safe  
     2024-Jan
       - added QoS and guaranteed delivery (for up to a ~4h net outage)                     
+    2025-Dec
+      - added version variable to determine in future days what this device is running
  */
 
 #include <Particle.h>
@@ -15,10 +17,16 @@
 #include "secrets.h" 
 #include <OneWire.h>
 #include <DS18B20.h>
+
 // include topics for mqtt
 #include "topics.h"
+
 // include misc variables
 #include "vars.h"
+
+// versioning support 
+#include "app_version.h"
+const char* firmwareVersion = APP_VERSION;
 
 FuelGauge fuel;                   // lipo battery
 DS18B20  sensor(D1, true);        // DS18B20 temperature sensor (needs libraries OneWire and DS18B20)
@@ -65,6 +73,9 @@ void setup() {
       Particle.publish("----STUCK----", "self-reboot after 4 mqtt fails", 3600, PRIVATE);
       SELF_RESTART = FALSE;
     }
+
+    Particle.variable("fwVersion", firmwareVersion);
+    Particle.publish("app_version", APP_VERSION, PRIVATE);
 
     fuelPercent = fuel.getSoC();
     Particle.publish("mqtt_startup", "Attempting to connect to HA", 3600, PRIVATE);
