@@ -6,6 +6,9 @@
       - added ds18b20 temperature sensor to monitor crawlspace
     2021-Jan
       - added connection check to MQTT just to be safe                       
+    2026-Feb
+      - convert to use Particle.publish to eliminate the need for
+        port forwarding at server side.
  */
 
 #include <Particle.h>
@@ -19,26 +22,15 @@
 #include "vars.h"
 
 FuelGauge fuel;                   // lipo battery
-DS18B20  sensor(D1, true);        // DS18B20 temperature sensor (needs libraries OneWire and DS18B20)
+DS18B20  sensor(D1, true);        // DS18B20 temperature sensor 
 
-// MQTT 
 
-#define MQTT_KEEPALIVE 35 * 60              // 60s is std default
-void timer_callback_send_mqqt_data();    
-void mqtt_callback(char* topic, byte* payload, unsigned int length) {
-     char p[length + 1];
-     memcpy(p, payload, length);
-     p[length] = 0; 
-     Particle.publish("mqtt recvd", p, 3600, PRIVATE);
- }
-MQTT client(MY_SERVER, 1883, MQTT_KEEPALIVE, mqtt_callback);
-int MQTT_CODE = 0;
 Timer checkTimer(FIVE_MIN, checkPower);
 Timer reportTimer(REPORT, reportPower);
 bool  TimeToCheck     = TRUE;
 bool  TimeToReport    = TRUE;
 
-// Application watchdog - sometimes MQTT wedges things
+// Application watchdog - in case of wedges
 int DOGTIME = 120000;           // wait 2 minutes before pulling the ripcord
 retained bool REBORN  = FALSE;  // did app watchdog restart us?
 ApplicationWatchdog *wd;
@@ -60,20 +52,13 @@ void setup() {
       REBORN = FALSE;
     }
     if (SELF_RESTART) {
-      Particle.publish("----STUCK----", "self-reboot after 4 mqtt fails", 3600, PRIVATE);
+      Particle.publish("----STUCK----", "self-reboot", 3600, PRIVATE);
       SELF_RESTART = FALSE;
     }
 
     fuelPercent = fuel.getSoC();
-    Particle.publish("mqtt_startup", "Attempting to connect to HA", 3600, PRIVATE);
-    client.connect(CLIENT_NAME, HA_USR, HA_PWD);
-    // check MQTT 
-    if (client.isConnected()) {
-        Particle.publish("mqtt_startup", "Connected to HA", 3600, PRIVATE);
-        //client.disconnect();
-      } else {
-        Particle.publish("mqtt_startup", "Fail connect HA - check secrets.h", 3600, PRIVATE);
-    }
+    Particle.publish("START", "Starting Lake Watch", 3600, PRIVATE);
+    
     //client.disconnect();
     checkTimer.start();
     reportTimer.start();
@@ -88,14 +73,14 @@ void loop() {
         powerSource = System.powerSource();
         if (powerSource == LINE_PWR) {
           if (!PowerIsOn) {
-            tellHASS(TOPIC_B, String(powerSource));
+            publishPowerwatch("power_change");
             Particle.publish("POWER-start ON", String(powerSource), PRIVATE);
             reportTimer.changePeriod(REPORT);
           }
           PowerIsOn = TRUE;
         } else {
           if (PowerIsOn) {
-            tellHASS(TOPIC_C, String(powerSource));
+            publishPowerwatch("power_change");
             Particle.publish("POWER OUT", String(powerSource), PRIVATE);
             reportTimer.changePeriod(FIVE_MIN);
           }
@@ -103,60 +88,27 @@ void loop() {
         }
         // check crawlspace
         crawlTemp = getTemp();
-        if (crawlTemp > allGood) {
+        /* if (crawlTemp > allGood) {
           if (inDanger) {
             tellHASS(TOPIC_E, String(crawlTemp));
             inDanger=FALSE;
           }
-        }
+        } */
         if (crawlTemp < danger)    { 
-          tellHASS(TOPIC_F, String(crawlTemp)); 
-          if (crawlTemp < Freezing)  { 
+          publishPowerwatch("temp_alert");
+          /*if (crawlTemp < Freezing)  { 
             tellHASS(TOPIC_G, String(crawlTemp)); 
             Particle.publish("CRAWLSPACE DANGER", String(powerSource), PRIVATE);
             inDanger=TRUE;
-          }
+          }*/
         }
     }
 
     if (TimeToReport) {
       TimeToReport = FALSE;
       wd->checkin(); // poke app watchdog we're going in...
+      publishPowerwatch("periodic");
 
-      //client.disconnect();
-      if (client.isConnected()) {
-        //Particle.publish("mqtt", "connected ok", 3600, PRIVATE); delay(100);
-      } else {  
-        Particle.publish("mqtt", "reconnecting", 3600, PRIVATE); delay(100);
-        client.connect(CLIENT_NAME, HA_USR,HA_PWD);
-        delay(2000);
-      }
-
-      if (client.isConnected()){
-        fails=0;
-        tellHASS(TOPIC_A, String(fuelPercent));
-        if (PowerIsOn) {  tellHASS(TOPIC_B, String(fuelPercent));
-            } else {  tellHASS(TOPIC_C, String(fuelPercent)); }
-        tellHASS(TOPIC_D, String(crawlTemp));
-        if (inDanger) {
-          if (crawlTemp < Freezing) {
-            tellHASS(TOPIC_G, String(crawlTemp));
-         } else tellHASS(TOPIC_F, String(crawlTemp));
-        }
-        tellHASS(TOPIC_H, String(mqttCt));
-        tellHASS(TOPIC_I, String(mqttFails));
-        //client.disconnect();
-      } else {
-        Particle.publish("mqtt", "Failed to connect", 3600, PRIVATE);
-        mqttFails++;
-        fails++;
-        if (fails > GIVE_UP) {
-          SELF_RESTART=TRUE;
-          Particle.publish("-STUCK-", "Too many fails- restarting", 3600, PRIVATE);
-          System.reset(RESET_NO_WAIT);
-        }
-      }
-      Particle.publish("MQTT", String("Fail rate " + String(mqttFails) + "/" + String(mqttCt)),3600, PRIVATE);
       void myWatchdogHandler(void); // reset the dog
     }
 } 
@@ -170,18 +122,33 @@ void checkPower() {  TimeToCheck = TRUE;  }
 // Reporting timer interrupt handler
 void reportPower() {  TimeToReport = TRUE;  }
 
-// Report to HASS via MQTT
-void tellHASS (const char *ha_topic, String ha_payload) {  
+// Use Particle.publish to send data and alerts as needed to HASSIO
 
-  delay(100); // bit of delay in between successive messages
-  if (client.isConnected()){
-    client.publish(ha_topic, ha_payload);
-    mqttCt++;
-  } else {
-    mqttFails++;
-    Particle.publish("mqtt", "Connection dropped", 3600, PRIVATE);
-  }
+void publishPowerwatch(const char* reason) {
+  // Keep payload small; Particle event data limit depends on Device OS/platform. :contentReference[oaicite:3]{index=3}
+  char json[320];
+
+  snprintf(json, sizeof(json),
+    "{\"fuelPercent\":%.1f,"
+    "\"powerSource\":%d,"
+    "\"powerIsOn\":%s,"
+    "\"crawlTempF\":%.2f,"
+    "\"inDanger\":%s,"
+    "\"fw\":\"%s\","
+    "\"reason\":\"%s\"}",
+    fuelPercent,
+    powerSource,
+    PowerIsOn ? "true" : "false",
+    crawlTemp,
+    inDanger ? "true" : "false",
+    APP_VERSION,
+    reason
+  );
+
+  // WITH_ACK confirms the Particle Cloud received it (not that your webhook endpoint did). :contentReference[oaicite:4]{index=4}
+  Particle.publish("ha/cabin/powerwatch", json, PRIVATE | WITH_ACK);
 }
+
 
 //  Check the crawlspace on the DS18B20 sensor (code from Lib examples)
 
