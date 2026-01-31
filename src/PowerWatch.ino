@@ -12,12 +12,8 @@
  */
 
 #include <Particle.h>
-#include <MQTT.h>
-#include "secrets.h" 
 #include <OneWire.h>
 #include <DS18B20.h>
-// include topics for mqtt
-#include "topics.h"
 // include misc variables
 #include "vars.h"
 
@@ -66,6 +62,8 @@ void setup() {
 
 void loop() {
 
+    wd->checkin(); // poke app watchdog we're going in...
+
 // check everything when timer fires; notify only state changes
     if (TimeToCheck) {
         TimeToCheck = FALSE;
@@ -106,10 +104,7 @@ void loop() {
 
     if (TimeToReport) {
       TimeToReport = FALSE;
-      wd->checkin(); // poke app watchdog we're going in...
       publishPowerwatch("periodic");
-
-      void myWatchdogHandler(void); // reset the dog
     }
 } 
 /************************************/
