@@ -3,10 +3,11 @@
 Lake-Watch is a **Particle Electron (cellular + LiPo)** firmware that monitors:
 
 - **Crawlspace temperature** (to avoid frozen pipes)
-- **Utility power status** (on/off, inferred from charging / power source)
-- **Battery level** (fuel gauge)
+- **Home power status** (on/off, inferred from charging / power source)
+- **Electron External LiPo Battery level** (fuel gauge)
 
-This repository is the **Particle.publish / webhook** version. It is designed to keep reporting **even when the remote site's LAN and/or Home Assistant box is down** (e.g., during a power outage), while also avoiding **any inbound ports** opened to your home network.
+This repository is the **Particle.publish / webhook** version. It replaces the
+MQTT version so that we need not rely on open ports at the server side.
 
 ---
 
@@ -29,10 +30,6 @@ Particle Electron (cellular)
                   └─ Option B: republish to local MQTT topics (compatibility)
 ```
 
-Why this is better for the remote-site power-outage case:
-- The Electron can continue sending **directly over cellular**.
-- No dependency on the remote LAN, remote router, or a remote Home Assistant server.
-- Your home Home Assistant does **not** need inbound access from the internet.
 
 References:
 - `Particle.publish()` API: https://docs.particle.io/reference/device-os/api/publish/particle-publish-publish/
