@@ -16,25 +16,35 @@
 #include <DS18B20.h>
 // include misc variables
 #include "vars.h"
+#include <math.h> 
+
+#ifndef APP_VERSION
+#define APP_VERSION "Lake-Watch-ParticlePublish-v1"
+#endif
+
 
 FuelGauge fuel;                   // lipo battery
 DS18B20  sensor(D1, true);        // DS18B20 temperature sensor 
 
+void checkPower();
+void reportPower();
+double getTemp();
+void publishPowerwatch(const char* reason);
 
 Timer checkTimer(FIVE_MIN, checkPower);
 Timer reportTimer(REPORT, reportPower);
-bool  TimeToCheck     = TRUE;
-bool  TimeToReport    = TRUE;
+bool  TimeToCheck     = true;
+bool  TimeToReport    = true;
 
 // Application watchdog - in case of wedges
 int DOGTIME = 120000;           // wait 2 minutes before pulling the ripcord
-retained bool REBORN  = FALSE;  // did app watchdog restart us?
+retained bool REBORN  = false;  // did app watchdog restart us?
 ApplicationWatchdog *wd;
 void watchdogHandler() {
-  REBORN = TRUE;
+  REBORN = true;
   System.reset(RESET_NO_WAIT);
 }
-retained bool SELF_RESTART = FALSE;
+retained bool SELF_RESTART = false;
 int fails = 0;
 int GIVE_UP = 3;
 
@@ -44,12 +54,12 @@ void setup() {
 
     wd = new ApplicationWatchdog(DOGTIME, watchdogHandler, 1536); // restart after DOGTIME sec no pulse
     if (REBORN) {
-      Particle.publish("****WEDGED****", "app watchdog restart", 3600, PRIVATE);
-      REBORN = FALSE;
+      Particle.publish("wedged", "app_watchdog_restart", 3600, PRIVATE);
+      REBORN = false;
     }
     if (SELF_RESTART) {
-      Particle.publish("----STUCK----", "self-reboot", 3600, PRIVATE);
-      SELF_RESTART = FALSE;
+      Particle.publish("stuck", "self-reboot", 3600, PRIVATE);
+      SELF_RESTART = false;
     }
 
     fuelPercent = fuel.getSoC();
@@ -66,44 +76,44 @@ void loop() {
 
 // check everything when timer fires; notify only state changes
     if (TimeToCheck) {
-        TimeToCheck = FALSE;
+        TimeToCheck = false;
         fuelPercent = fuel.getSoC(); 
         powerSource = System.powerSource();
         if (powerSource == LINE_PWR) {
           if (!PowerIsOn) {
             publishPowerwatch("power_change");
-            Particle.publish("POWER-start ON", String(powerSource), PRIVATE);
+            Particle.publish("power_on", String(powerSource), PRIVATE);
             reportTimer.changePeriod(REPORT);
           }
-          PowerIsOn = TRUE;
+          PowerIsOn = true;
         } else {
           if (PowerIsOn) {
             publishPowerwatch("power_change");
-            Particle.publish("POWER OUT", String(powerSource), PRIVATE);
+            Particle.publish("power_outage", String(powerSource), PRIVATE);
             reportTimer.changePeriod(FIVE_MIN);
           }
-          PowerIsOn = FALSE;
+          PowerIsOn = false;
         }
         // check crawlspace
         crawlTemp = getTemp();
         /* if (crawlTemp > allGood) {
           if (inDanger) {
             tellHASS(TOPIC_E, String(crawlTemp));
-            inDanger=FALSE;
+            inDanger=false;
           }
         } */
-        if (crawlTemp < danger)    { 
-          publishPowerwatch("temp_alert");
+        if (tempValid && !isnan(crawlTemp) && crawlTemp < danger) {
+            publishPowerwatch("temp_alert");
           /*if (crawlTemp < Freezing)  { 
             tellHASS(TOPIC_G, String(crawlTemp)); 
             Particle.publish("CRAWLSPACE DANGER", String(powerSource), PRIVATE);
-            inDanger=TRUE;
+            inDanger=true;
           }*/
         }
     }
 
     if (TimeToReport) {
-      TimeToReport = FALSE;
+      TimeToReport = false;
       publishPowerwatch("periodic");
     }
 } 
@@ -112,53 +122,64 @@ void loop() {
 /************************************/
 
 // Checking timer interrupt handler
-void checkPower() {  TimeToCheck = TRUE;  }
+void checkPower() {  TimeToCheck = true;  }
 
 // Reporting timer interrupt handler
-void reportPower() {  TimeToReport = TRUE;  }
+void reportPower() {  TimeToReport = true;  }
 
 // Use Particle.publish to send data and alerts as needed to HASSIO
 
 void publishPowerwatch(const char* reason) {
-  // Keep payload small; Particle event data limit depends on Device OS/platform. :contentReference[oaicite:3]{index=3}
   char json[320];
+
+  // Render crawlTemp as JSON null if invalid
+  char tempPart[64];
+  if (tempValid && !isnan(crawlTemp)) {
+    snprintf(tempPart, sizeof(tempPart), "%.2f", crawlTemp);
+  } else {
+    snprintf(tempPart, sizeof(tempPart), "null");
+  }
 
   snprintf(json, sizeof(json),
     "{\"fuelPercent\":%.1f,"
     "\"powerSource\":%d,"
     "\"powerIsOn\":%s,"
-    "\"crawlTempF\":%.2f,"
-    "\"inDanger\":%s,"
-    "\"fw\":\"%s\","
+    "\"crawlTempF\":%s,"
+    "\"tempValid\":%s,"
+    "\"tempFailCt\":%d,"
     "\"reason\":\"%s\"}",
     fuelPercent,
     powerSource,
     PowerIsOn ? "true" : "false",
-    crawlTemp,
-    inDanger ? "true" : "false",
-    APP_VERSION,
+    tempPart,
+    tempValid ? "true" : "false",
+    tempFailCt,
     reason
   );
 
-  // WITH_ACK confirms the Particle Cloud received it (not that your webhook endpoint did). :contentReference[oaicite:4]{index=4}
   Particle.publish("ha/cabin/powerwatch", json, PRIVATE | WITH_ACK);
 }
 
 
-//  Check the crawlspace on the DS18B20 sensor (code from Lib examples)
+//  Check the crawlspace on the DS18B20 sensor (adapted from Lib examples)
 
-double getTemp() {  
+double getTemp() {
   float _temp;
-  float fahrenheit = 0;
-  int   i = 0;
+  int i = 0;
 
-  do {  _temp = sensor.getTemperature();
-  } while (!sensor.crcCheck() && MAXRETRY > i++);
-  if (i < MAXRETRY) {  
-    fahrenheit = sensor.convertToFahrenheit(_temp);
+  do {
+    _temp = sensor.getTemperature();
+  } while (!sensor.crcCheck() && (MAXRETRY > i++));
+
+  if (i < MAXRETRY) {
+    tempValid = true;
+    // optional: clear fail counter on success
+    // tempFailCt = 0;
+    return sensor.convertToFahrenheit(_temp);
   } else {
-    Particle.publish("ERROR", "Invalid reading", PRIVATE);
+    tempValid = false;
+    tempFailCt++;
+    return NAN;
   }
-  return (fahrenheit); 
 }
 
