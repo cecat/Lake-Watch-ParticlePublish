@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+src/*.swp
+src/.*.swp
+
+# Particle Workbench / build output
+target/
+src/*.cpp
+
+# Optional: if you do NOT want to vendor libraries
+# lib/
+
